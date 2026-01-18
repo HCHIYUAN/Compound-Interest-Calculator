@@ -1,12 +1,36 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { 
   Plus, Trash2, TrendingUp, DollarSign, Activity, AlertCircle, 
   LayoutDashboard, Table as TableIcon, Clock
 } from 'lucide-react';
 import {
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
-  ResponsiveContainer, AreaChart, Area
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
+  ResponsiveContainer
 } from 'recharts';
+
+// --- Constants ---
+const CONSTANTS = {
+  MAX_ITEMS: 10,
+  MAX_YEARS: 100,
+  DEFAULT_ITEM: {
+    name: '',
+    principal: 10000,
+    rate: 5,
+    contribution: 3000,
+    contributionFreq: 'monthly'
+  },
+  CONTRIBUTION_FREQ: {
+    MONTHLY: 'monthly',
+    YEARLY: 'yearly'
+  }
+};
+
+// --- Helper function ---
+const safeNumber = (value) => {
+  if (value === '' || value === null || value === undefined) return 0;
+  const num = Number(value);
+  return isNaN(num) ? 0 : num;
+};
 
 // --- UI Components ---
 const Card = ({ children, className = "" }) => (
@@ -23,12 +47,9 @@ const CardHeader = ({ title, subtitle }) => (
 );
 
 const CardContent = ({ children, className = "" }) => (
-  <div className={`p-6 ${className}`}>
-    {children}
-  </div>
+  <div className={`p-6 ${className}`}>{children}</div>
 );
 
-// Toggle Switch Component
 const ToggleSwitch = ({ label, checked, onChange, helpText }) => (
   <div className="flex items-center justify-between">
     <div>
@@ -40,6 +61,7 @@ const ToggleSwitch = ({ label, checked, onChange, helpText }) => (
       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
         checked ? 'bg-blue-600' : 'bg-slate-200'
       }`}
+      aria-label={label}
     >
       <span
         className={`${
@@ -50,17 +72,190 @@ const ToggleSwitch = ({ label, checked, onChange, helpText }) => (
   </div>
 );
 
+// --- Investment Item Component ---
+const InvestmentItem = React.memo(({ item, onUpdate, onRemove }) => {
+  const handleFieldChange = useCallback((field, value) => {
+    onUpdate(item.id, field, value);
+  }, [item.id, onUpdate]);
+
+  return (
+    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 relative group">
+      <button 
+        onClick={() => onRemove(item.id)}
+        className="absolute top-2 right-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition p-1"
+        aria-label={`移除 ${item.name}`}
+      >
+        <Trash2 size={16} />
+      </button>
+      
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs font-semibold text-slate-500">標的名稱</label>
+          <input
+            type="text"
+            value={item.name}
+            onChange={(e) => handleFieldChange('name', e.target.value)}
+            onFocus={(e) => e.target.select()}
+            className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
+          />
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500">初始本金</label>
+            <input
+              type="number"
+              value={safeNumber(item.principal)}
+              onChange={(e) => handleFieldChange('principal', e.target.value)}
+              onFocus={(e) => e.target.select()}
+              className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
+              placeholder="0"
+              min="0"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">年報酬率 (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={safeNumber(item.rate)}
+              onChange={(e) => handleFieldChange('rate', e.target.value)}
+              onFocus={(e) => e.target.select()}
+              className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
+              placeholder="0"
+            />
+          </div>
+        </div>
+        
+        <div className="pt-2 mt-2 border-t border-slate-200">
+          <label className="flex items-center gap-1 text-xs font-semibold text-blue-600 mb-1">
+            <Clock size={12} /> 定期定額投入
+          </label>
+          <div className="grid grid-cols-5 gap-2">
+            <div className="col-span-3">
+              <input
+                type="number"
+                value={safeNumber(item.contribution)}
+                onChange={(e) => handleFieldChange('contribution', e.target.value)}
+                onFocus={(e) => e.target.select()}
+                className="w-full p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
+                placeholder="金額"
+                min="0"
+              />
+            </div>
+            <div className="col-span-2">
+              <select 
+                value={item.contributionFreq}
+                onChange={(e) => handleFieldChange('contributionFreq', e.target.value)}
+                className="w-full p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none bg-white"
+              >
+                <option value={CONSTANTS.CONTRIBUTION_FREQ.MONTHLY}>每月</option>
+                <option value={CONSTANTS.CONTRIBUTION_FREQ.YEARLY}>每年</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+InvestmentItem.displayName = 'InvestmentItem';
+
+// --- Calculation Hook ---
+const useCompoundCalculation = (currentAge, years, inflationRate, items, isCompound) => {
+  return useMemo(() => {
+    const safeStartAge = safeNumber(currentAge);
+    const safeYears = Math.min(Math.max(0, safeNumber(years)), CONSTANTS.MAX_YEARS);
+    
+    if (safeYears === 0 || items.length === 0) {
+      return [{
+        yearIndex: 0,
+        age: safeStartAge,
+        principal: 0,
+        nominalBalance: 0,
+        profit: 0,
+        dividend: 0,
+        realBalance: 0,
+      }];
+    }
+
+    const yearlyData = [];
+    
+    const currentPortfolios = items.map(item => ({
+      currentValue: safeNumber(item.principal),
+      investedPrincipal: safeNumber(item.principal),
+      safeRate: safeNumber(item.rate),
+      safeContribution: safeNumber(item.contribution),
+      contributionFreq: item.contributionFreq,
+      accumulatedDividends: 0
+    }));
+
+    const safeInflationRate = safeNumber(inflationRate);
+
+    for (let year = 0; year <= safeYears; year++) {
+      let yearTotalNominal = 0;
+      let yearTotalDividend = 0;
+      
+      if (year === 0) {
+        yearTotalNominal = currentPortfolios.reduce((sum, p) => sum + p.investedPrincipal, 0);
+      } else {
+        for (let month = 0; month < 12; month++) {
+          currentPortfolios.forEach(portfolio => {
+            let contributionAmount = 0;
+            if (portfolio.contributionFreq === CONSTANTS.CONTRIBUTION_FREQ.MONTHLY) {
+              contributionAmount = portfolio.safeContribution;
+            } else if (portfolio.contributionFreq === CONSTANTS.CONTRIBUTION_FREQ.YEARLY && month === 0) {
+              contributionAmount = portfolio.safeContribution;
+            }
+
+            portfolio.currentValue += contributionAmount;
+            portfolio.investedPrincipal += contributionAmount;
+
+            const monthlyGrowth = portfolio.currentValue * (portfolio.safeRate / 100 / 12);
+            
+            if (isCompound) {
+              portfolio.currentValue += monthlyGrowth;
+            } else {
+              portfolio.accumulatedDividends += monthlyGrowth;
+            }
+            
+            yearTotalDividend += monthlyGrowth;
+          });
+        }
+
+        yearTotalNominal = currentPortfolios.reduce((sum, p) => 
+          sum + p.currentValue + (isCompound ? 0 : p.accumulatedDividends), 0
+        );
+      }
+
+      const totalInvestedPrincipal = currentPortfolios.reduce((sum, p) => sum + p.investedPrincipal, 0);
+      const inflationFactor = Math.pow(1 + (safeInflationRate / 100), year);
+      const realValue = yearTotalNominal / inflationFactor;
+
+      yearlyData.push({
+        yearIndex: year,
+        age: safeStartAge + year,
+        principal: Math.round(totalInvestedPrincipal),
+        nominalBalance: Math.round(yearTotalNominal),
+        profit: Math.round(yearTotalNominal - totalInvestedPrincipal),
+        dividend: Math.round(yearTotalDividend),
+        realBalance: Math.round(realValue),
+      });
+    }
+
+    return yearlyData;
+  }, [currentAge, years, inflationRate, items, isCompound]);
+};
+
+// --- Main Component ---
 export default function App() {
-  // --- State ---
   const [activeView, setActiveView] = useState('dashboard');
-  
-  // Default: Start from 0 years old, duration 65 years
   const [currentAge, setCurrentAge] = useState(0);
   const [years, setYears] = useState(65);
   const [inflationRate, setInflationRate] = useState(2);
-  const [isCompound, setIsCompound] = useState(true); 
+  const [isCompound, setIsCompound] = useState(true);
   
-  // Items with Regular Contribution (SIP) fields
   const [items, setItems] = useState([
     { 
       id: 1, 
@@ -80,150 +275,67 @@ export default function App() {
     },
   ]);
 
-  // --- Helpers ---
-  const formatCurrency = (val) => {
+  const formatCurrency = useCallback((val) => {
     return new Intl.NumberFormat('zh-TW', {
       style: 'currency',
       currency: 'TWD',
       maximumFractionDigits: 0,
       minimumFractionDigits: 0
     }).format(val || 0);
-  };
+  }, []);
 
-  const handleNumberChange = (value, setter) => {
-    if (value === '') setter('');
-    else setter(Number(value));
-  };
+  const handleNumberChange = useCallback((value, setter) => {
+    const num = safeNumber(value);
+    setter(num >= 0 ? num : 0);
+  }, []);
 
-  const addItem = () => {
-    if (items.length >= 10) return;
+  const addItem = useCallback(() => {
+    if (items.length >= CONSTANTS.MAX_ITEMS) return;
+    
     const newId = items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1;
-    setItems([...items, { 
+    setItems(prev => [...prev, { 
       id: newId, 
       name: `投資項目 ${items.length + 1}`, 
-      principal: 10000, 
-      rate: 5,
-      contribution: 3000,
-      contributionFreq: 'monthly'
+      ...CONSTANTS.DEFAULT_ITEM
     }]);
-  };
+  }, [items.length]);
 
-  const removeItem = (id) => {
-    setItems(items.filter(item => item.id !== id));
-  };
+  const removeItem = useCallback((id) => {
+    setItems(prev => prev.filter(item => item.id !== id));
+  }, []);
 
-  const updateItem = (id, field, value) => {
-    setItems(items.map(item => {
+  const updateItem = useCallback((id, field, value) => {
+    setItems(prev => prev.map(item => {
       if (item.id !== id) return item;
+      
       if (['principal', 'rate', 'contribution'].includes(field)) {
-        return { ...item, [field]: value === '' ? '' : Number(value) };
+        const numValue = safeNumber(value);
+        return { ...item, [field]: numValue >= 0 ? numValue : 0 };
       }
       return { ...item, [field]: value };
     }));
+  }, []);
+
+  const calculationResult = useCompoundCalculation(
+    currentAge, 
+    years, 
+    inflationRate, 
+    items, 
+    isCompound
+  );
+
+  const finalResult = calculationResult[calculationResult.length - 1] || {
+    principal: 0,
+    nominalBalance: 0,
+    profit: 0,
+    realBalance: 0
   };
-
-  // --- Calculation Logic ---
-  const calculationResult = useMemo(() => {
-    let yearlyData = [];
-    const safeStartAge = currentAge === '' ? 0 : Number(currentAge);
-    const safeYears = years === '' ? 0 : Number(years);
-    
-    // Initialize portfolios tracking objects
-    let currentPortfolios = items.map(item => ({
-      ...item,
-      // Current Value of the asset (Stock Value)
-      currentValue: item.principal === '' ? 0 : parseFloat(item.principal),
-      // Track how much principal has been put in total (Initial + SIP)
-      investedPrincipal: item.principal === '' ? 0 : parseFloat(item.principal),
-      // Safe numeric values for calculation
-      safeRate: item.rate === '' ? 0 : parseFloat(item.rate),
-      safeContribution: item.contribution === '' ? 0 : parseFloat(item.contribution),
-      // For Simple Interest mode: track cash dividends sitting on the side
-      accumulatedDividends: 0 
-    }));
-
-    // Initial State (Year 0)
-    let totalInvestedPrincipal = currentPortfolios.reduce((sum, item) => sum + item.investedPrincipal, 0);
-    
-    // Safety limit to prevent browser hang on huge numbers
-    const loopYears = Math.min(Math.max(0, safeYears), 100); 
-
-    for (let i = 0; i <= loopYears; i++) {
-      let yearTotalNominal = 0;
-      let yearTotalDividend = 0; 
-      
-      if (i === 0) {
-        yearTotalNominal = totalInvestedPrincipal;
-        yearTotalDividend = 0;
-      } else {
-        // Simulate 12 months for accuracy
-        for (let m = 0; m < 12; m++) {
-          currentPortfolios.forEach(item => {
-            // 1. Regular Contribution
-            let contributionAmount = 0;
-            if (item.contributionFreq === 'monthly') {
-               contributionAmount = item.safeContribution;
-            } else if (item.contributionFreq === 'yearly' && m === 0) {
-               contributionAmount = item.safeContribution;
-            }
-
-            item.currentValue += contributionAmount;
-            item.investedPrincipal += contributionAmount;
-
-            // 2. Interest (Monthly)
-            const monthlyGrowth = item.currentValue * (item.safeRate / 100 / 12);
-            
-            // 3. Dividend Handling
-            if (isCompound) {
-              item.currentValue += monthlyGrowth;
-            } else {
-              item.accumulatedDividends += monthlyGrowth;
-            }
-            
-            yearTotalDividend += monthlyGrowth;
-          });
-        }
-
-        // Summation
-        if (isCompound) {
-          yearTotalNominal = currentPortfolios.reduce((sum, item) => sum + item.currentValue, 0);
-        } else {
-          yearTotalNominal = currentPortfolios.reduce((sum, item) => sum + item.currentValue + item.accumulatedDividends, 0);
-        }
-        
-        totalInvestedPrincipal = currentPortfolios.reduce((sum, item) => sum + item.investedPrincipal, 0);
-      }
-
-      // 4. Inflation Adjustment
-      const realValue = yearTotalNominal / Math.pow(1 + (inflationRate / 100), i);
-
-      yearlyData.push({
-        yearIndex: i,
-        age: safeStartAge + i,
-        principal: Math.round(totalInvestedPrincipal),
-        nominalBalance: Math.round(yearTotalNominal),
-        profit: Math.round(yearTotalNominal - totalInvestedPrincipal),
-        dividend: Math.round(yearTotalDividend),
-        realBalance: Math.round(realValue),
-      });
-    }
-
-    return yearlyData;
-  }, [currentAge, years, inflationRate, items, isCompound]);
-
-  const finalResult = calculationResult.length > 0 
-    ? calculationResult[calculationResult.length - 1] 
-    : { principal: 0, nominalBalance: 0, profit: 0, realBalance: 0 };
-
-  const safeStartAge = currentAge === '' ? 0 : currentAge;
-  const safeYears = years === '' ? 0 : years;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
       <div className="max-w-7xl mx-auto space-y-6">
         
-        {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
             <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
               <TrendingUp className="w-8 h-8 text-blue-600" />
@@ -232,21 +344,19 @@ export default function App() {
             <p className="text-slate-500 mt-2">含定期定額、複利效應與通膨計算</p>
           </div>
           <div className="bg-blue-50 px-4 py-2 rounded-lg border border-blue-100 text-blue-800 text-sm font-medium flex items-center gap-2">
-             <AlertCircle size={16} />
-             {isCompound ? "目前模式：複利滾存 (配息再投入)" : "目前模式：單利計算 (配息領出)"}
+            <AlertCircle size={16} />
+            {isCompound ? "目前模式：複利滾存 (配息再投入)" : "目前模式：單利計算 (配息領出)"}
           </div>
-        </div>
+        </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* Left Column: Settings */}
-          <div className="lg:col-span-4 space-y-6">
+          <aside className="lg:col-span-4 space-y-6">
             
-            {/* Basic Settings */}
             <Card>
               <CardHeader title="基礎設定" />
               <CardContent className="space-y-6">
-                 <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
                   <ToggleSwitch 
                     label="配息再投入 (複利效應)" 
                     checked={isCompound} 
@@ -257,32 +367,44 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">目前年齡</label>
+                    <label htmlFor="current-age" className="block text-sm font-medium text-slate-700 mb-1">
+                      目前年齡
+                    </label>
                     <input
+                      id="current-age"
                       type="number"
-                      value={currentAge}
+                      value={safeNumber(currentAge)}
                       onChange={(e) => handleNumberChange(e.target.value, setCurrentAge)}
                       onFocus={(e) => e.target.select()}
                       className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      min="0"
+                      max="120"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">投資年數</label>
+                    <label htmlFor="investment-years" className="block text-sm font-medium text-slate-700 mb-1">
+                      投資年數
+                    </label>
                     <input
+                      id="investment-years"
                       type="number"
-                      value={years}
+                      value={safeNumber(years)}
                       onChange={(e) => handleNumberChange(e.target.value, setYears)}
                       onFocus={(e) => e.target.select()}
                       className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      min="0"
+                      max={CONSTANTS.MAX_YEARS}
                     />
                   </div>
                 </div>
+                
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1 flex justify-between">
+                  <label htmlFor="inflation-rate" className="block text-sm font-medium text-slate-700 mb-1 flex justify-between">
                     預期年通貨膨脹率 
                     <span className="text-slate-400 font-normal">{inflationRate}%</span>
                   </label>
                   <input 
+                    id="inflation-rate"
                     type="range" 
                     min="0" 
                     max="10" 
@@ -296,91 +418,21 @@ export default function App() {
               </CardContent>
             </Card>
 
-            {/* Investment Items */}
             <Card>
               <CardHeader 
-                title={`投資組合 (${items.length}/10)`} 
+                title={`投資組合 (${items.length}/${CONSTANTS.MAX_ITEMS})`} 
                 subtitle="設定初始本金與定期定額" 
               />
               <CardContent className="space-y-4 max-h-[600px] overflow-y-auto custom-scrollbar">
                 {items.map((item) => (
-                  <div key={item.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200 relative group">
-                    <button 
-                      onClick={() => removeItem(item.id)}
-                      className="absolute top-2 right-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition p-1"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs font-semibold text-slate-500">標的名稱</label>
-                        <input
-                          type="text"
-                          value={item.name}
-                          onChange={(e) => updateItem(item.id, 'name', e.target.value)}
-                          onFocus={(e) => e.target.select()}
-                          className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs font-semibold text-slate-500">初始本金</label>
-                          <input
-                            type="number"
-                            value={item.principal}
-                            onChange={(e) => updateItem(item.id, 'principal', e.target.value)}
-                            onFocus={(e) => e.target.select()}
-                            className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
-                            placeholder="0"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-semibold text-slate-500">年報酬率 (%)</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={item.rate}
-                            onChange={(e) => updateItem(item.id, 'rate', e.target.value)}
-                            onFocus={(e) => e.target.select()}
-                            className="w-full mt-1 p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
-                            placeholder="0"
-                          />
-                        </div>
-                      </div>
-                      
-                      {/* Regular Contribution Section */}
-                      <div className="pt-2 mt-2 border-t border-slate-200">
-                        <label className="flex items-center gap-1 text-xs font-semibold text-blue-600 mb-1">
-                          <Clock size={12} /> 定期定額投入
-                        </label>
-                        <div className="grid grid-cols-5 gap-2">
-                          <div className="col-span-3">
-                             <input
-                              type="number"
-                              value={item.contribution}
-                              onChange={(e) => updateItem(item.id, 'contribution', e.target.value)}
-                              onFocus={(e) => e.target.select()}
-                              className="w-full p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"
-                              placeholder="金額"
-                            />
-                          </div>
-                          <div className="col-span-2">
-                            <select 
-                              value={item.contributionFreq}
-                              onChange={(e) => updateItem(item.id, 'contributionFreq', e.target.value)}
-                              className="w-full p-1.5 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none bg-white"
-                            >
-                              <option value="monthly">每月</option>
-                              <option value="yearly">每年</option>
-                            </select>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <InvestmentItem
+                    key={item.id}
+                    item={item}
+                    onUpdate={updateItem}
+                    onRemove={removeItem}
+                  />
                 ))}
-                  
-                {items.length < 10 && (
+                {items.length < CONSTANTS.MAX_ITEMS && (
                   <button
                     onClick={addItem}
                     className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 font-medium hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 transition flex items-center justify-center gap-2"
@@ -390,15 +442,15 @@ export default function App() {
                 )}
               </CardContent>
             </Card>
-          </div>
+          </aside>
 
-          {/* Right Column: Dynamic View */}
-          <div className="lg:col-span-8">
+          <main className="lg:col-span-8">
             
-            {/* View Switcher Tabs */}
-            <div className="bg-slate-200 p-1 rounded-xl inline-flex mb-6 w-full md:w-auto">
+            <nav className="bg-slate-200 p-1 rounded-xl inline-flex mb-6 w-full md:w-auto" role="tablist">
               <button
                 onClick={() => setActiveView('dashboard')}
+                role="tab"
+                aria-selected={activeView === 'dashboard'}
                 className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   activeView === 'dashboard' 
                     ? 'bg-white text-slate-800 shadow-sm' 
@@ -410,6 +462,8 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveView('table')}
+                role="tab"
+                aria-selected={activeView === 'table'}
                 className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   activeView === 'table' 
                     ? 'bg-white text-slate-800 shadow-sm' 
@@ -419,157 +473,163 @@ export default function App() {
                 <TableIcon size={18} />
                 年度詳細報表
               </button>
-            </div>
+            </nav>
 
-            {/* --- DASHBOARD VIEW --- */}
             {activeView === 'dashboard' && (
-              <div className="space-y-6 animate-fade-in">
-                {/* Summary Cards */}
+              <div className="space-y-6 animate-fade-in" role="tabpanel">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="p-2 bg-slate-100 rounded-lg text-slate-600">
-                        <DollarSign size={20} />
+                  <Card>
+                    <div className="p-6">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 bg-slate-100 rounded-lg text-slate-600">
+                          <DollarSign size={20} />
+                        </div>
+                        <span className="text-sm text-slate-500 font-medium">累積總投入本金</span>
                       </div>
-                      <span className="text-sm text-slate-500 font-medium">累積總投入本金</span>
+                      <div className="text-2xl font-bold text-slate-900">
+                        {formatCurrency(finalResult.principal)}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">初始本金 + 定期定額</div>
                     </div>
-                    <div className="text-2xl font-bold text-slate-900">
-                      {formatCurrency(finalResult.principal)}
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1">初始本金 + 定期定額</div>
-                  </div>
+                  </Card>
 
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="p-2 bg-green-100 rounded-lg text-green-600">
-                        <TrendingUp size={20} />
+                  <Card>
+                    <div className="p-6">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 bg-green-100 rounded-lg text-green-600">
+                          <TrendingUp size={20} />
+                        </div>
+                        <span className="text-sm text-slate-500 font-medium">期末名目總資產</span>
                       </div>
-                      <span className="text-sm text-slate-500 font-medium">期末名目總資產</span>
+                      <div className="text-2xl font-bold text-green-600">
+                        {formatCurrency(finalResult.nominalBalance)}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        總獲利: <span className="text-green-600">+{formatCurrency(finalResult.profit)}</span>
+                      </div>
                     </div>
-                    <div className="text-2xl font-bold text-green-600">
-                      {formatCurrency(finalResult.nominalBalance)}
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      總獲利: <span className="text-green-600">+{formatCurrency(finalResult.profit)}</span>
-                    </div>
-                  </div>
+                  </Card>
 
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="p-2 bg-purple-100 rounded-lg text-purple-600">
-                        <Activity size={20} />
+                  <Card>
+                    <div className="p-6">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 bg-purple-100 rounded-lg text-purple-600">
+                          <Activity size={20} />
+                        </div>
+                        <span className="text-sm text-slate-500 font-medium">實質購買力</span>
                       </div>
-                      <span className="text-sm text-slate-500 font-medium">實質購買力</span>
+                      <div className="text-2xl font-bold text-purple-600">
+                        {formatCurrency(finalResult.realBalance)}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">經 {inflationRate}% 通膨調整</div>
                     </div>
-                    <div className="text-2xl font-bold text-purple-600">
-                      {formatCurrency(finalResult.realBalance)}
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1">經 {inflationRate}% 通膨調整</div>
-                  </div>
+                  </Card>
                 </div>
 
-                {/* Main Chart */}
                 <Card>
                   <CardHeader title="資產成長趨勢" subtitle="本金累積 vs 複利成長" />
                   <CardContent className="h-[450px]">
-                    <div style={{ width: '100%', height: '100%', minHeight: '300px' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={calculationResult} margin={{ top: 10, right: 30, left: 20, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="colorNominal" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#16a34a" stopOpacity={0.1}/>
-                              <stop offset="95%" stopColor="#16a34a" stopOpacity={0}/>
-                            </linearGradient>
-                            <linearGradient id="colorReal" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#9333ea" stopOpacity={0.1}/>
-                              <stop offset="95%" stopColor="#9333ea" stopOpacity={0}/>
-                            </linearGradient>
-                          </defs>
-                          <XAxis 
-                            dataKey="age" 
-                            label={{ value: '年齡', position: 'insideBottomRight', offset: -5 }} 
-                          />
-                          <YAxis 
-                            tickFormatter={(value) => `${(value / 10000).toFixed(0)}萬`}
-                            width={80}
-                          />
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <Tooltip 
-                            formatter={(value) => formatCurrency(value)}
-                            labelFormatter={(label) => `${label} 歲`}
-                            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}
-                          />
-                          <Legend verticalAlign="top" height={36}/>
-                          
-                          <Area 
-                            type="monotone" 
-                            dataKey="nominalBalance" 
-                            name="名目總資產" 
-                            stroke="#16a34a" 
-                            fillOpacity={1} 
-                            fill="url(#colorNominal)" 
-                            strokeWidth={2}
-                          />
-                          <Area 
-                            type="monotone" 
-                            dataKey="principal" 
-                            name="累積投入本金" 
-                            stroke="#94a3b8" 
-                            fill="#f1f5f9"
-                            fillOpacity={0.8}
-                            strokeWidth={2}
-                          />
-                          <Area 
-                            type="monotone" 
-                            dataKey="realBalance" 
-                            name="實質購買力" 
-                            stroke="#9333ea" 
-                            fillOpacity={1} 
-                            fill="url(#colorReal)" 
-                            strokeWidth={2}
-                            strokeDasharray="5 5"
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={calculationResult} margin={{ top: 10, right: 30, left: 20, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="colorNominal" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#16a34a" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#16a34a" stopOpacity={0}/>
+                          </linearGradient>
+                          <linearGradient id="colorReal" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#9333ea" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#9333ea" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis 
+                          dataKey="age" 
+                          label={{ value: '年齡', position: 'insideBottomRight', offset: -5 }} 
+                        />
+                        <YAxis 
+                          tickFormatter={(value) => `${(value / 10000).toFixed(0)}萬`}
+                          width={80}
+                        />
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <Tooltip 
+                          formatter={(value) => formatCurrency(value)}
+                          labelFormatter={(label) => `${label} 歲`}
+                          contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}
+                        />
+                        <Legend verticalAlign="top" height={36}/>
+                        
+                        <Area 
+                          type="monotone" 
+                          dataKey="nominalBalance" 
+                          name="名目總資產" 
+                          stroke="#16a34a" 
+                          fillOpacity={1} 
+                          fill="url(#colorNominal)" 
+                          strokeWidth={2}
+                        />
+                        <Area 
+                          type="monotone" 
+                          dataKey="principal" 
+                          name="累積投入本金" 
+                          stroke="#94a3b8" 
+                          fill="#f1f5f9"
+                          fillOpacity={0.8}
+                          strokeWidth={2}
+                        />
+                        <Area 
+                          type="monotone" 
+                          dataKey="realBalance" 
+                          name="實質購買力" 
+                          stroke="#9333ea" 
+                          fillOpacity={1} 
+                          fill="url(#colorReal)" 
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
                   </CardContent>
                 </Card>
               </div>
             )}
 
-            {/* --- TABLE VIEW --- */}
             {activeView === 'table' && (
-              <div className="animate-fade-in">
+              <div className="animate-fade-in" role="tabpanel">
                 <Card>
                   <CardHeader 
                     title="年度詳細財務報表" 
-                    subtitle={`紀錄包含初始本金與定期定額的累積過程`}
+                    subtitle="紀錄包含初始本金與定期定額的累積過程"
                   />
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left">
                       <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200 sticky top-0">
                         <tr>
-                          <th className="px-6 py-4 font-medium">年齡</th>
-                          <th className="px-6 py-4 font-medium">年度</th>
-                          <th className="px-6 py-4 font-medium text-right">累積本金</th>
-                          <th className="px-6 py-4 font-medium text-right text-green-600">
-                             {isCompound ? "當年度獲利 (滾入)" : "當年度獲利 (領出)"}
+                          <th scope="col" className="px-6 py-4 font-medium">年齡</th>
+                          <th scope="col" className="px-6 py-4 font-medium">年度</th>
+                          <th scope="col" className="px-6 py-4 font-medium text-right">累積本金</th>
+                          <th scope="col" className="px-6 py-4 font-medium text-right text-green-600">
+                            {isCompound ? "當年度獲利 (滾入)" : "當年度獲利 (領出)"}
                           </th>
-                          <th className="px-6 py-4 font-medium text-right">名目總資產</th>
-                          <th className="px-6 py-4 font-medium text-right text-purple-600">實質購買力</th>
+                          <th scope="col" className="px-6 py-4 font-medium text-right">名目總資產</th>
+                          <th scope="col" className="px-6 py-4 font-medium text-right text-purple-600">實質購買力</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {calculationResult.map((row) => (
-                          <tr key={row.age} className="hover:bg-slate-50 transition">
+                          <tr key={`${row.age}-${row.yearIndex}`} className="hover:bg-slate-50 transition">
                             <td className="px-6 py-4 font-medium text-slate-900">{row.age} 歲</td>
                             <td className="px-6 py-4 text-slate-500">第 {row.yearIndex} 年</td>
-                            <td className="px-6 py-4 text-right font-mono text-slate-600">{formatCurrency(row.principal)}</td>
+                            <td className="px-6 py-4 text-right font-mono text-slate-600">
+                              {formatCurrency(row.principal)}
+                            </td>
                             <td className="px-6 py-4 text-right font-mono text-green-600 bg-green-50/50">
                               {row.dividend > 0 ? `+${formatCurrency(row.dividend)}` : '-'}
                             </td>
-                            <td className="px-6 py-4 text-right font-mono font-bold text-slate-800">{formatCurrency(row.nominalBalance)}</td>
-                            <td className="px-6 py-4 text-right font-mono text-purple-600">{formatCurrency(row.realBalance)}</td>
+                            <td className="px-6 py-4 text-right font-mono font-bold text-slate-800">
+                              {formatCurrency(row.nominalBalance)}
+                            </td>
+                            <td className="px-6 py-4 text-right font-mono text-purple-600">
+                              {formatCurrency(row.realBalance)}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -579,7 +639,7 @@ export default function App() {
               </div>
             )}
 
-          </div>
+          </main>
         </div>
       </div>
     </div>
